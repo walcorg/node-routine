@@ -90,3 +90,7 @@ El detalle completo está en el encabezado del sketch.
 - Corrección de puntos por canal (VPRG en D12; requiere ajustar la biblioteca Tlc5940).
 - Actualización de firmware por I2C (twiboot).
 - Lectura de la EEPROM de identificación de la flex (0x50).
+
+## Licencia
+
+[MIT](LICENSE) © 2026 WALCORG TERRAFORMING CORP. Puedes usar, modificar y distribuir este código, incluso con fines comerciales, siempre que conserves el aviso de copyright y el texto de la licencia.
