@@ -1,96 +1,96 @@
 # node-routine
 
-Firmware unificado para el Arduino Nano del **nodo v4.5** de **WALCORG TERRAFORMING CORP.**: control de LEDs (TLC59401), lectura de 16 sensores de luz, desinfección UVC y protocolo esclavo I2C hacia Clorela-OS.
+Unified Arduino Nano firmware for the **WALCORG TERRAFORMING CORP.** **v4.5 photobioreactor node**: LED control (TLC59401), 16-channel light sensing, UVC disinfection and an I2C slave protocol for Clorela-OS.
 
 <p align="center">
-  <img src="docs/img/01-nodo-v4.5.png" alt="Nodo v4.5" height="420">
+  <img src="docs/img/01-node-v4.5.png" alt="Node v4.5" height="420">
 </p>
 
-## Contenido
+## Contents
 
-| Ruta | Descripción |
+| Path | Description |
 |---|---|
-| [`firmware/walcorg_nodo_v45/walcorg_nodo_v45.ino`](firmware/walcorg_nodo_v45/walcorg_nodo_v45.ino) | Sketch único para el Arduino Nano (ATmega328P) de la PCB rígida |
-| [`host/nodo_i2c_ejemplo.py`](host/nodo_i2c_ejemplo.py) | Ejemplo de maestro I2C en Python para la Raspberry Pi Zero W (shield) |
-| [`docs/img/`](docs/img) | Imágenes del nodo, la flex, la PCB rígida, el shield y la caja del kit |
+| [`firmware/walcorg_node_v45/walcorg_node_v45.ino`](firmware/walcorg_node_v45/walcorg_node_v45.ino) | Single sketch for the Arduino Nano (ATmega328P) on the rigid PCB |
+| [`host/node_i2c_example.py`](host/node_i2c_example.py) | Python I2C master example for the Raspberry Pi Zero W (shield) |
+| [`docs/img/`](docs/img) | Images of the node, flex PCB, rigid PCB, shield and kit box |
 
-## Arquitectura
+## Architecture
 
 ```
 Raspberry Pi Zero W + shield (Clorela-OS)
-        │  USB-B: +5 V (PTC 500 mA) + I2C 100 kHz (SDA = D-, SCL = D+)
+        │  USB-B: +5 V (500 mA PTC) + I2C 100 kHz (SDA = D-, SCL = D+)
         ▼
-PCB rígida v4.5 ── Arduino Nano (esclavo I2C 0x10–0x13)
-        │            ├─ TLC59401: 12 LEDs visibles + 4 LEDs UVC
-        │            ├─ CD74HC4067: 16 sensores de luz → A0
-        │            └─ MT3608: +V_UV (9 V) para los UVC
-        ▼  J1 / J2 (FPC 40 pines, 0.5 mm)
-PCB flexible ── LEDs, sensores y EEPROM de identificación en las paredes del cubo (1 L)
+Rigid PCB v4.5 ── Arduino Nano (I2C slave 0x10–0x13)
+        │            ├─ TLC59401: 12 visible LEDs + 4 UVC LEDs
+        │            ├─ CD74HC4067: 16 light sensors → A0
+        │            └─ MT3608: +V_UV (9 V) for the UVC LEDs
+        ▼  J1 / J2 (40-pin FPC, 0.5 mm)
+Flex PCB ── LEDs, sensors and ID EEPROM on the walls of the 1 L cube
 ```
 
 | | |
 |---|---|
-| ![PCB flexible: colas FPC](docs/img/02-flex-colas-fpc.png) | ![PCB rígida](docs/img/03-pcb-rigida.png) |
-| PCB flexible: colas FPC hacia J1 y J2 | PCB rígida con el Arduino Nano |
-| ![Shield para Raspberry Pi Zero W](docs/img/04-shield-pi-zero-w.png) | ![Caja del kit de ensamble](docs/img/05-caja-kit-ensamble.png) |
-| Shield para la Raspberry Pi Zero W, que gobierna uno o varios nodos | Caja del kit de ensamble del nodo |
+| ![Flex PCB: FPC tails](docs/img/02-flex-fpc-tails.png) | ![Rigid PCB](docs/img/03-rigid-pcb.png) |
+| Flex PCB: FPC tails that plug into J1 and J2 | Rigid PCB that carries the Arduino Nano |
+| ![Raspberry Pi Zero W shield](docs/img/04-pi-zero-w-shield.png) | ![Assembly kit box](docs/img/05-assembly-kit-box.png) |
+| Raspberry Pi Zero W shield that drives one or more nodes | Retail box for the node assembly kit |
 
-## Mapa de canales
+## Channel map
 
-| TLC59401 | Uso | CD74HC4067 | Uso |
+| TLC59401 | Use | CD74HC4067 | Use |
 |---|---|---|---|
-| 0–7 | LEDs de datos (1 bit c/u, LSB = canal 0) | 0–7 | SENS_B0–B7, retrodispersión (J1) |
-| 8–11 | LEDs de calibración | 8–15 | SENS_T0–T7, transmisión (J2) |
-| 12–15 | LEDs UVC (275 nm) | | |
+| 0–7 | Data LEDs (1 bit each, LSB = channel 0) | 0–7 | SENS_B0–B7, backscatter (J1) |
+| 8–11 | Calibration LEDs | 8–15 | SENS_T0–T7, transmission (J2) |
+| 12–15 | UVC LEDs (275 nm) | | |
 
-## Compilar y cargar
+## Build and upload
 
-1. Arduino IDE, placa **Arduino Nano**, procesador **ATmega328P**.
-2. Instala la biblioteca **Tlc5940** (Gestor de bibliotecas, o [PaulStoffregen/Tlc5940](https://github.com/PaulStoffregen/Tlc5940)). Su configuración por defecto coincide con los pines de la placa.
-3. Si el Nano usa el bootloader antiguo («ATmega328P (Old Bootloader)»), pon `USE_WATCHDOG 0` en el sketch.
+1. Arduino IDE, board **Arduino Nano**, processor **ATmega328P**.
+2. Install the **Tlc5940** library (Library Manager, or [PaulStoffregen/Tlc5940](https://github.com/PaulStoffregen/Tlc5940)). Its default configuration matches this board's pinout.
+3. If your Nano uses the old bootloader ("ATmega328P (Old Bootloader)"), set `USE_WATCHDOG 0` in the sketch.
 
-Uso de memoria: ~8 KB de flash (25 %) y ~1 KB de RAM (51 %).
+Memory usage: ~8 KB flash (25 %) and ~1 KB RAM (51 %).
 
-## Protocolo I2C
+## I2C protocol
 
-Dirección: `0x10 + ADDR1·2 + ADDR0` (solder jumpers SJ1/SJ2; cerrado = 1).
+Address: `0x10 + ADDR1·2 + ADDR0` (solder jumpers SJ1/SJ2; closed = 1).
 
-- El maestro escribe `[comando, argumentos…]` (máximo 32 bytes).
-- Una lectura después de un comando devuelve **8 bytes de estado**: `[estado, banderas, último_cmd, error, versión_fw, uv_seg_L, uv_seg_H, dirección]`.
-- `R, página` prepara una página de **datos** (16 valores `uint16` little-endian): 0 = última medición, 1 = oscuridad, 2–13 = LED 0–11 encendido solo, 14 = configuración.
+- The master writes `[command, arguments…]` (32 bytes max).
+- A read after any command returns **8 status bytes**: `[state, flags, last_cmd, error, fw_version, uv_sec_L, uv_sec_H, address]`.
+- `R, page` selects a **data** page (16 little-endian `uint16` values): 0 = last measurement, 1 = dark baseline, 2–13 = LED 0–11 on alone, 14 = configuration.
 
-| Comando | Acción |
+| Command | Action |
 |---|---|
-| `G` | Verifica oscuridad (bandera DARK_ALERT si algún sensor > umbral) |
-| `H, n` | Enciende solo el LED n (0–11), mide y lo apaga |
-| `K, byte` | Muestra el byte en los LEDs 0–7, mide y deja el patrón |
-| `M, maskL, maskH` | Enciende los LEDs visibles de la máscara (12 bits) |
-| `S` / `O` | Mide con los LEDs actuales / apaga los LEDs visibles |
-| `B, vL, vH, texto` | Reproduce texto en los LEDs 0–7 (v = ms por carácter) |
-| `C` | Calibración completa (páginas 1–13) |
-| `E [, sL, sH]` | Desinfección UVC (300 s por defecto, máximo 1800 s) |
-| `F` | Detiene la desinfección UVC |
-| `D` | Modo seguro: apaga todo de inmediato |
-| `L, r` | Rango de medición: 0 normal, 1 sensible |
-| `P, id, vL, vH` | Parámetros: 0 estabilización (ms), 1 umbral de oscuridad, 2 intensidad visible, 3 intensidad UVC, 4 muestras, 5 duración UVC por defecto |
+| `G` | Darkness check (sets DARK_ALERT if any sensor > threshold) |
+| `H, n` | Turns on only LED n (0–11), measures, then turns it off |
+| `K, byte` | Shows the byte on LEDs 0–7, measures and keeps the pattern on |
+| `M, maskL, maskH` | Turns on the visible LEDs in the 12-bit mask |
+| `S` / `O` | Measure with the current LEDs / turn all visible LEDs off |
+| `B, vL, vH, text` | Plays text on LEDs 0–7 (v = ms per character) |
+| `C` | Full calibration (pages 1–13) |
+| `E [, sL, sH]` | UVC disinfection (300 s by default, 1800 s max) |
+| `F` | Stops UVC disinfection |
+| `D` | Safe mode: turns everything off immediately |
+| `L, r` | Measurement range: 0 normal, 1 sensitive |
+| `P, id, vL, vH` | Parameters: 0 settle time (ms), 1 dark threshold, 2 visible intensity, 3 UVC intensity, 4 samples, 5 default UVC duration |
 
-El detalle completo está en el encabezado del sketch.
+Full details are in the sketch header.
 
-## Seguridad UVC
+## UVC safety
 
-> ⚠️ Los LEDs UVC (275 nm) dañan ojos y piel. Úsalos solo con el nodo vacío (entre cultivos) y la tapa cerrada.
+> ⚠️ The UVC LEDs (275 nm) are harmful to eyes and skin. Use them only with an empty node (between cultures) and the lid closed.
 
-- Duración máxima de 30 min, fija en el firmware.
-- Al encender el UVC se apagan los LEDs visibles (presupuesto de corriente del USB).
-- Con el UVC activo solo se aceptan `F` y `D`, que interrumpen cualquier operación en curso.
-- Watchdog de 2 s: si el firmware se cuelga, el Nano se reinicia con el UVC y el elevador apagados.
+- Maximum duration of 30 min, hard-coded in the firmware.
+- Turning on the UVC LEDs switches off the visible LEDs (USB current budget).
+- While UVC is active only `F` and `D` are accepted, and both interrupt any operation in progress.
+- 2 s watchdog: if the firmware hangs, the Nano resets with the UVC LEDs and boost converter off.
 
-## Pendiente
+## Roadmap
 
-- Corrección de puntos por canal (VPRG en D12; requiere ajustar la biblioteca Tlc5940).
-- Actualización de firmware por I2C (twiboot).
-- Lectura de la EEPROM de identificación de la flex (0x50).
+- Per-channel dot correction (VPRG on D12; requires adjusting the Tlc5940 library).
+- Firmware updates over I2C (twiboot).
+- Reading the flex PCB ID EEPROM (0x50).
 
-## Licencia
+## License
 
-[MIT](LICENSE) © 2026 WALCORG TERRAFORMING CORP. Puedes usar, modificar y distribuir este código, incluso con fines comerciales, siempre que conserves el aviso de copyright y el texto de la licencia.
+[MIT](LICENSE) © 2026 WALCORG TERRAFORMING CORP. You may use, modify and distribute this code, including for commercial purposes, as long as you keep the copyright notice and the license text.

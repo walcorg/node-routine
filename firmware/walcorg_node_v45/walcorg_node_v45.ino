@@ -1,92 +1,93 @@
 /*
   ============================================================================
-  WALCORG TERRAFORMING CORP. - Nodo v4.5 (modelo de adquisicion de datos)
-  Firmware unificado para Arduino Nano (ATmega328P)          Version 0.1
+  WALCORG TERRAFORMING CORP. - Node v4.5 (data acquisition model)
+  Unified firmware for the Arduino Nano (ATmega328P)          Version 0.1
   ============================================================================
 
-  Une en un solo sketch las rutinas anteriores:
-    - rutine_verify_photo_zero_v1/v2   -> comando 'G' (verificar oscuridad)
-    - rutine_photo_sampling_v1/v2      -> comando 'H' (un LED + lectura)
-    - password_sha-256 / leds_codif.   -> comando 'K' (byte en 8 LEDs + lectura)
-    - rutine_modules_control_v1 (B,C,D)-> comandos 'B', 'C', 'D'
-    - rutine_sterelization_uv (E,F)    -> comandos 'E', 'F'
-  Todo por I2C (esclavo); ya no se usa el puerto serie para control.
+  Merges the previous routines into a single sketch:
+    - rutine_verify_photo_zero_v1/v2   -> command 'G' (darkness check)
+    - rutine_photo_sampling_v1/v2      -> command 'H' (single LED + reading)
+    - password_sha-256 / leds_codif.   -> command 'K' (byte on 8 LEDs + reading)
+    - rutine_modules_control_v1 (B,C,D)-> commands 'B', 'C', 'D'
+    - rutine_sterelization_uv (E,F)    -> commands 'E', 'F'
+  Everything runs over I2C (slave); the serial port is no longer used for control.
 
   ---------------------------------------------------------------------------
-  HARDWARE (PCB rigida v4.5)
+  HARDWARE (rigid PCB v4.5)
   ---------------------------------------------------------------------------
-    TLC59401 (16 canales, sumidero de corriente):
-      D3  GSCLK   D9  XLAT   D10 BLANK   D11 SIN   D13 SCLK  (los usa la libreria)
-      D12 MODE  (VPRG: LOW = modo escala de grises)
-      A6  XERR  (drenador abierto, pull-up 10k; LOW = LED abierto o sobretemperatura)
-      Canales:  0-7  LED_K0..K7   LEDs de datos (1 bit cada uno, LSB = LED_K0)
-                8-11 LED_K8..K11  LEDs de calibracion
-                12-15 UV_K12..K15 LEDs UVC (anodo en +V_UV, 9 V)
-    CD74HC4067 (multiplexor analogico 16:1):
-      D4-D7 S0-S3   A0 MUX_SIG (COMMON)   E a GND
-      Entradas: 0-7 SENS_B0..B7 (retrodispersion, J1)
-                8-15 SENS_T0..T7 (transmision, J2)
-    A3  RANGE_SEL  salida LOW = rango normal (~9.1k)
-                   entrada (alta Z) = rango sensible (100k). NUNCA salida HIGH.
-    A2  UV_EN      habilita el elevador MT3608 (+V_UV). LOW = apagado.
-    A1  INT_EXP1   interrupcion de modulos de expansion (activa en LOW)
-    D2  ADDR0, D8 ADDR1  solder jumpers a GND -> direccion 0x10..0x13
-    A4/A5 SDA/SCL  bus I2C hacia el shield (pull-ups 4.7k en el shield)
+    TLC59401 (16 constant-current sink channels):
+      D3  GSCLK   D9  XLAT   D10 BLANK   D11 SIN   D13 SCLK  (driven by the library)
+      D12 MODE  (VPRG: LOW = grayscale mode)
+      A6  XERR  (open drain, 10k pull-up; LOW = open LED or over-temperature)
+      Channels: 0-7   LED_K0..K7   data LEDs (1 bit each, LSB = LED_K0)
+                8-11  LED_K8..K11  calibration LEDs
+                12-15 UV_K12..K15  UVC LEDs (anode on +V_UV, 9 V)
+    CD74HC4067 (16:1 analog multiplexer):
+      D4-D7 S0-S3   A0 MUX_SIG (COMMON)   E tied to GND
+      Inputs: 0-7  SENS_B0..B7 (backscatter, J1)
+              8-15 SENS_T0..T7 (transmission, J2)
+    A3  RANGE_SEL  output LOW = normal range (~9.1k)
+                   input (high Z) = sensitive range (100k). NEVER drive it HIGH.
+    A2  UV_EN      enables the MT3608 boost converter (+V_UV). LOW = off.
+    A1  INT_EXP1   interrupt from expansion modules (active LOW)
+    D2  ADDR0, D8 ADDR1  solder jumpers to GND -> address 0x10..0x13
+    A4/A5 SDA/SCL  I2C bus to the shield (4.7k pull-ups on the shield)
 
-  Libreria requerida: "Tlc5940" (Alex Leone; fork de Paul Stoffregen).
-  Con su configuracion por defecto (NUM_TLCS 1, VPRG_ENABLED 0, TLC_SPI) los
-  pines coinciden con esta placa. Usa Timer1 y Timer2: no usar analogWrite()
-  en D3, D9, D10, D11 ni tone().
+  Required library: "Tlc5940" (Alex Leone; Paul Stoffregen fork).
+  With its default configuration (NUM_TLCS 1, VPRG_ENABLED 0, TLC_SPI) the
+  pins match this board. It uses Timer1 and Timer2: do not use analogWrite()
+  on D3, D9, D10, D11, nor tone().
 
   ---------------------------------------------------------------------------
-  PROTOCOLO I2C  (direccion 0x10 + ADDR1*2 + ADDR0; jumper cerrado = 1)
+  I2C PROTOCOL  (address 0x10 + ADDR1*2 + ADDR0; closed jumper = 1)
   ---------------------------------------------------------------------------
-  El maestro escribe [comando, argumentos...] (maximo 32 bytes).
-  Despues de cualquier comando (excepto 'R'), una lectura devuelve el ESTADO:
-     8 bytes: [estado, banderas, ultimo_cmd, error, version_fw,
-               uv_seg_restantes_L, uv_seg_restantes_H, direccion_i2c]
-  'R',pagina prepara una pagina de DATOS; la siguiente lectura devuelve
-     32 bytes = 16 valores uint16 little-endian (0-1023):
-       pagina 0      ultima medicion (16 sensores, indice = canal del mux)
-       pagina 1      calibracion: oscuridad (todos los LEDs apagados)
-       pagina 2..13  calibracion: LED 0..11 encendido solo
-       pagina 14     configuracion actual (parametros 0..5, ver 'P')
-  '?' vuelve a modo ESTADO sin ejecutar nada.
+  The master writes [command, arguments...] (32 bytes max).
+  After any command (except 'R'), a read returns the STATUS:
+     8 bytes: [state, flags, last_cmd, error, fw_version,
+               uv_sec_remaining_L, uv_sec_remaining_H, i2c_address]
+  'R',page selects a DATA page; the next read returns
+     32 bytes = 16 little-endian uint16 values (0-1023):
+       page 0      last measurement (16 sensors, index = mux channel)
+       page 1      calibration: dark baseline (all LEDs off)
+       page 2..13  calibration: LED 0..11 on alone
+       page 14     current configuration (parameters 0..5, see 'P')
+  '?' switches back to STATUS mode without running anything.
 
-  Comandos:
-   'G'                    Verifica oscuridad: apaga LEDs y mide los 16 sensores.
-                          Activa la bandera DARK_ALERT si alguno > umbral.
-   'H', n                 Enciende solo el LED n (0-11), mide y lo apaga.
-   'K', byte              Muestra el byte en los LEDs 0-7 (bit i -> LED i),
-                          espera, mide y deja el patron encendido.
-                          Es la primitiva para codificar texto caracter a caracter.
-   'M', maskL, maskH      Enciende los LEDs visibles indicados por la mascara (12 bits).
-   'S'                    Mide los 16 sensores con los LEDs como esten.
-   'O'                    Apaga todos los LEDs visibles.
-   'B', vL, vH, texto...  Reproduce el texto en los LEDs 0-7, v = ms por caracter
-                          (sin medir; para demostracion). Hasta 29 caracteres.
-   'C'                    Calibracion completa: oscuridad + cada LED 0-11 solo.
-                          Resultados en las paginas 1-13.
-   'E' [, sL, sH]         Desinfeccion UVC durante s segundos (defecto 300,
-                          maximo 1800). Parpadeo rapido al encender y al apagar.
-   'F'                    Detiene la desinfeccion UVC.
-   'D'                    Modo seguro: apaga TODO de inmediato (LEDs, UVC, elevador).
-   'L', r                 Rango de medicion: 0 normal, 1 sensible.
-   'P', id, vL, vH        Ajusta un parametro:
-                            0 tiempo de estabilizacion de LEDs (ms, defecto 30)
-                            1 umbral de oscuridad (0-1023, defecto 20)
-                            2 intensidad LEDs visibles (0-4095, defecto 4095)
-                            3 intensidad UVC (0-4095, defecto 4095)
-                            4 muestras promediadas por sensor (1-16, defecto 4)
-                            5 duracion UVC por defecto (s, defecto 300)
-  'F' y 'D' se atienden aunque haya otra operacion en curso.
+  Commands:
+   'G'                    Darkness check: turns the LEDs off and measures the
+                          16 sensors. Sets DARK_ALERT if any reading > threshold.
+   'H', n                 Turns on only LED n (0-11), measures, then turns it off.
+   'K', byte              Shows the byte on LEDs 0-7 (bit i -> LED i), waits,
+                          measures and keeps the pattern on.
+                          Building block for encoding text one character at a time.
+   'M', maskL, maskH      Turns on the visible LEDs given by the 12-bit mask.
+   'S'                    Measures the 16 sensors with the LEDs as they are.
+   'O'                    Turns all visible LEDs off.
+   'B', vL, vH, text...   Plays the text on LEDs 0-7, v = ms per character
+                          (no measurement; for demos). Up to 29 characters.
+   'C'                    Full calibration: dark baseline + each LED 0-11 alone.
+                          Results in pages 1-13.
+   'E' [, sL, sH]         UVC disinfection for s seconds (default 300,
+                          max 1800). Fast blinking when turning on and off.
+   'F'                    Stops UVC disinfection.
+   'D'                    Safe mode: turns EVERYTHING off immediately
+                          (LEDs, UVC, boost converter).
+   'L', r                 Measurement range: 0 normal, 1 sensitive.
+   'P', id, vL, vH        Sets a parameter:
+                            0 LED settle time (ms, default 30)
+                            1 dark threshold (0-1023, default 20)
+                            2 visible LED intensity (0-4095, default 4095)
+                            3 UVC intensity (0-4095, default 4095)
+                            4 samples averaged per sensor (1-16, default 4)
+                            5 default UVC duration (s, default 300)
+  'F' and 'D' are served even while another operation is running.
 
-  Estados: 0 LIBRE, 1 OCUPADO, 2 UVC (encendiendo/encendido/apagando), 3 REPRODUCIENDO
-  Banderas (bits): 0 DATOS_LISTOS  1 DARK_ALERT  2 XERR  3 UV_ACTIVO
-                   4 RANGO_SENSIBLE  5 INT_EXP  6 REINICIO_POR_WATCHDOG
-  Errores: 0 ninguno, 1 comando desconocido, 2 argumento invalido,
-           3 ocupado (ya habia un comando pendiente), 4 bloqueado por UVC activo,
-           5 abortado por 'F' o 'D'
+  States: 0 IDLE, 1 BUSY, 2 UVC (ramping on / on / ramping off), 3 PLAYING
+  Flags (bits): 0 DATA_READY  1 DARK_ALERT  2 XERR  3 UV_ACTIVE
+                4 SENSITIVE_RANGE  5 INT_EXP  6 WATCHDOG_RESET
+  Errors: 0 none, 1 unknown command, 2 invalid argument,
+          3 busy (a command was already pending), 4 blocked by active UVC,
+          5 aborted by 'F' or 'D'
   ============================================================================
 */
 
@@ -95,12 +96,12 @@
 #include <avr/wdt.h>
 #include <string.h>
 
-// ----------------------------- Opciones de compilacion ----------------------
+// ----------------------------- Build options ---------------------------------
 #define FW_VERSION   0x01
-#define USE_WATCHDOG 1   // Poner en 0 si el Nano tiene el bootloader antiguo
-                         // (con ese bootloader un reinicio por watchdog lo deja
-                         //  en un ciclo de reinicios).
-#define DEBUG        0   // 1 = mensajes por Serial a 115200 (D0/D1 libres)
+#define USE_WATCHDOG 1   // Set to 0 if the Nano has the old bootloader
+                         // (with that bootloader a watchdog reset leaves it
+                         //  stuck in a reset loop).
+#define DEBUG        0   // 1 = debug messages on Serial at 115200 (D0/D1 are free)
 
 #if DEBUG
   #define DBG(x)   Serial.print(x)
@@ -110,7 +111,7 @@
   #define DBGLN(x)
 #endif
 
-// ----------------------------- Pines -----------------------------------------
+// ----------------------------- Pins ------------------------------------------
 const uint8_t PIN_ADDR0     = 2;
 const uint8_t PIN_ADDR1     = 8;
 const uint8_t PIN_MUX_S[4]  = {4, 5, 6, 7};
@@ -119,22 +120,22 @@ const uint8_t PIN_MUX_SIG   = A0;
 const uint8_t PIN_INT_EXP   = A1;
 const uint8_t PIN_UV_EN     = A2;
 const uint8_t PIN_RANGE_SEL = A3;
-const uint8_t PIN_TLC_XERR  = A6;   // solo analogica
+const uint8_t PIN_TLC_XERR  = A6;   // analog only
 
-// ----------------------------- Mapa de canales ------------------------------
-const uint8_t CH_DATA0     = 0;    // LEDs de datos 0..7
-const uint8_t NUM_VISIBLE  = 12;   // canales 0..11 (datos + calibracion)
+// ----------------------------- Channel map -----------------------------------
+const uint8_t CH_DATA0     = 0;    // data LEDs 0..7
+const uint8_t NUM_VISIBLE  = 12;   // channels 0..11 (data + calibration)
 const uint8_t CH_UV0       = 12;   // UVC 12..15
 const uint8_t NUM_UV       = 4;
 const uint8_t NUM_SENS     = 16;
 
-// ----------------------------- Limites de seguridad -------------------------
-const uint16_t UV_HARD_MAX_SEC = 1800;  // 30 min, no se puede superar por I2C
+// ----------------------------- Safety limits ---------------------------------
+const uint16_t UV_HARD_MAX_SEC = 1800;  // 30 min, cannot be exceeded over I2C
 const uint16_t UV_BLINK_MS     = 30;
 const uint8_t  UV_BLINK_COUNT  = 10;
-const uint16_t UV_BOOST_START_MS = 10;  // arranque del MT3608 antes del 1er parpadeo
+const uint16_t UV_BOOST_START_MS = 10;  // MT3608 start-up before the first blink
 
-// ----------------------------- Codigos ---------------------------------------
+// ----------------------------- Codes -----------------------------------------
 enum : uint8_t { ST_IDLE = 0, ST_BUSY = 1, ST_UV = 2, ST_PLAY = 3 };
 enum : uint8_t { ERR_NONE = 0, ERR_UNKNOWN = 1, ERR_ARG = 2, ERR_BUSY = 3,
                  ERR_UV_ACTIVE = 4, ERR_ABORTED = 5 };
@@ -143,9 +144,9 @@ enum : uint8_t { F_DATA = 0, F_DARK = 1, F_XERR = 2, F_UV = 3,
 enum : uint8_t { RESP_STATUS = 0, RESP_DATA = 1 };
 enum : uint8_t { UV_OFF = 0, UV_RAMP_ON, UV_ON, UV_RAMP_OFF };
 
-// ----------------------------- Configuracion --------------------------------
+// ----------------------------- Configuration ---------------------------------
 struct Config {
-  uint16_t ledSettleMs   = 30;    // fotorresistencias/fototransistores
+  uint16_t ledSettleMs   = 30;    // photoresistors / phototransistors
   uint16_t darkThreshold = 20;
   uint16_t visLevel      = 4095;
   uint16_t uvLevel       = 4095;
@@ -154,13 +155,13 @@ struct Config {
 } cfg;
 const uint8_t NUM_PARAMS = 6;
 
-// ----------------------------- Datos -----------------------------------------
-uint16_t frame[NUM_SENS];                     // ultima medicion
-uint16_t calib[1 + NUM_VISIBLE][NUM_SENS];    // fila 0 oscuridad, 1..12 LEDs
-uint16_t visibleMask = 0;                     // LEDs visibles encendidos
+// ----------------------------- Data ------------------------------------------
+uint16_t frame[NUM_SENS];                     // last measurement
+uint16_t calib[1 + NUM_VISIBLE][NUM_SENS];    // row 0 dark, rows 1..12 LEDs
+uint16_t visibleMask = 0;                     // visible LEDs currently on
 bool     rangeSensitive = false;
 
-// ----------------------------- Compartido con la ISR de I2C -----------------
+// ----------------------------- Shared with the I2C ISR -----------------------
 volatile uint8_t  rxBuf[32];
 volatile uint8_t  rxLen = 0;
 volatile bool     cmdPending = false;
@@ -178,10 +179,10 @@ uint8_t i2cAddr = 0x10;
 uint8_t       uvPhase = UV_OFF;
 uint8_t       uvToggles = 0;
 bool          uvLit = false;
-unsigned long uvT0 = 0;          // inicio de la fase actual / ultimo parpadeo
+unsigned long uvT0 = 0;          // start of the current phase / last blink
 unsigned long uvDurationMs = 0;
 
-// ----------------------------- Reproduccion de texto ------------------------
+// ----------------------------- Text playback ---------------------------------
 bool          playing = false;
 uint8_t       playBuf[29];
 uint8_t       playLen = 0, playIdx = 0;
@@ -189,12 +190,12 @@ uint16_t      playMs = 100;
 unsigned long playNext = 0;
 
 // =============================================================================
-//  Utilidades
+//  Helpers
 // =============================================================================
 static inline void setFlag(uint8_t bit, bool on) {
   uint8_t f = flags;
   if (on) f |= (1 << bit); else f &= ~(1 << bit);
-  flags = f;                        // escritura de un byte: atomica
+  flags = f;                        // single-byte write: atomic
 }
 
 static inline void petDog() {
@@ -203,7 +204,7 @@ static inline void petDog() {
 #endif
 }
 
-// Espera ms atendiendo watchdog y aborto. Devuelve false si se aborto.
+// Waits ms while feeding the watchdog and checking for abort. Returns false if aborted.
 bool waitMs(uint16_t ms) {
   unsigned long t0 = millis();
   while (millis() - t0 < ms) {
@@ -213,13 +214,13 @@ bool waitMs(uint16_t ms) {
   return true;
 }
 
-// Escribe los datos al TLC (espera si el envio anterior no se ha latcheado).
+// Sends the data to the TLC (waits if the previous transfer has not been latched yet).
 void tlcCommit() {
   while (Tlc.update()) { petDog(); }
 }
 
 void applyVisible(uint16_t mask) {
-  mask &= 0x0FFF;                   // solo canales 0..11; los UVC nunca se tocan aqui
+  mask &= 0x0FFF;                   // channels 0..11 only; UVC channels are never touched here
   for (uint8_t ch = 0; ch < NUM_VISIBLE; ch++) {
     Tlc.set(ch, (mask & (1u << ch)) ? cfg.visLevel : 0);
   }
@@ -235,10 +236,10 @@ void applyUV(bool on) {
 
 void setRange(bool sensitive) {
   if (sensitive) {
-    pinMode(PIN_RANGE_SEL, INPUT);          // alta impedancia -> solo 100k
+    pinMode(PIN_RANGE_SEL, INPUT);          // high impedance -> 100k only
   } else {
-    digitalWrite(PIN_RANGE_SEL, LOW);       // primero LOW para no pasar por HIGH
-    pinMode(PIN_RANGE_SEL, OUTPUT);         // 10k en paralelo -> ~9.1k
+    digitalWrite(PIN_RANGE_SEL, LOW);       // LOW first so the pin never goes HIGH
+    pinMode(PIN_RANGE_SEL, OUTPUT);         // 10k in parallel -> ~9.1k
   }
   rangeSensitive = sensitive;
   setFlag(F_RANGE, sensitive);
@@ -248,8 +249,8 @@ void setMux(uint8_t ch) {
   for (uint8_t b = 0; b < 4; b++) digitalWrite(PIN_MUX_S[b], (ch >> b) & 1);
 }
 
-// Mide los 16 sensores. Descarta la primera conversion de cada canal porque
-// el capacitor de muestreo del ADC tarda en cargarse con fuentes de alta Z.
+// Measures the 16 sensors. The first conversion of each channel is discarded
+// because the ADC sample-and-hold capacitor charges slowly from high-Z sources.
 bool readAll(uint16_t *out) {
   uint8_t n = constrain(cfg.samples, 1, 16);
   for (uint8_t ch = 0; ch < NUM_SENS; ch++) {
@@ -266,7 +267,7 @@ bool readAll(uint16_t *out) {
   return true;
 }
 
-// Mide hacia frame[] y marca datos listos.
+// Measures into frame[] and sets DATA_READY.
 bool measureFrame() {
   setFlag(F_DATA, false);
   if (!readAll(frame)) return false;
@@ -275,16 +276,16 @@ bool measureFrame() {
 }
 
 // =============================================================================
-//  UVC: maquina de estados no bloqueante
+//  UVC: non-blocking state machine
 // =============================================================================
 void uvStart(uint16_t sec) {
   playing = false;
-  applyVisible(0);                          // presupuesto de corriente del USB
-  digitalWrite(PIN_UV_EN, HIGH);            // arranca el elevador
+  applyVisible(0);                          // USB current budget
+  digitalWrite(PIN_UV_EN, HIGH);            // start the boost converter
   uvDurationMs = (unsigned long)sec * 1000UL;
   uvPhase = UV_RAMP_ON;
   uvToggles = 0;
-  uvT0 = millis() + UV_BOOST_START_MS;      // primer parpadeo tras el arranque
+  uvT0 = millis() + UV_BOOST_START_MS;      // first blink after boost start-up
   uvRemaining = sec;
   setFlag(F_UV, true);
   DBG(F("UV start ")); DBGLN(sec);
@@ -298,7 +299,7 @@ void uvStop() {
   DBGLN(F("UV stop"));
 }
 
-void uvKill() {                              // apagado inmediato
+void uvKill() {                              // immediate shutdown
   applyUV(false);
   digitalWrite(PIN_UV_EN, LOW);
   uvPhase = UV_OFF;
@@ -314,7 +315,7 @@ void uvService() {
         applyUV(!uvLit);
         uvT0 = now + UV_BLINK_MS;
         if (++uvToggles >= 2 * UV_BLINK_COUNT) {
-          applyUV(true);                    // queda encendido fijo
+          applyUV(true);                    // stays on steadily
           uvPhase = UV_ON;
           uvT0 = now;
         }
@@ -338,7 +339,7 @@ void uvService() {
 }
 
 // =============================================================================
-//  Reproduccion de texto en los 8 LEDs de datos
+//  Text playback on the 8 data LEDs
 // =============================================================================
 void playService() {
   if (!playing) return;
@@ -349,7 +350,7 @@ void playService() {
 }
 
 // =============================================================================
-//  Comandos
+//  Commands
 // =============================================================================
 void cmdVerifyDark() {                       // 'G'
   applyVisible(0);
@@ -411,11 +412,11 @@ void execute(const uint8_t *b, uint8_t n) {
   lastCmd = c;
   lastErr = ERR_NONE;
 
-  // Emergencias primero
+  // Emergencies first
   if (c == 'D') { abortReq = false; cmdSafe(); return; }
   if (c == 'F') { abortReq = false; uvStop(); return; }
 
-  // Con UVC activo solo se aceptan 'F', 'D', 'L' y 'P'
+  // While UVC is active only 'F', 'D', 'L' and 'P' are accepted
   if (uvPhase != UV_OFF && c != 'L' && c != 'P') { lastErr = ERR_UV_ACTIVE; return; }
 
   if (c != 'B' && c != 'L' && c != 'P') playing = false;
@@ -469,7 +470,7 @@ void updateFlags() {
 }
 
 // =============================================================================
-//  I2C (contexto de interrupcion: solo copiar datos, nada lento)
+//  I2C (interrupt context: copy data only, nothing slow)
 // =============================================================================
 void preparePage(uint8_t page) {
   const uint16_t *src = nullptr;
@@ -484,7 +485,7 @@ void preparePage(uint8_t page) {
     src = tmp;
   }
   for (uint8_t i = 0; i < NUM_SENS; i++) {
-    uint16_t v = src ? src[i] : 0xFFFF;      // pagina invalida -> 0xFFFF
+    uint16_t v = src ? src[i] : 0xFFFF;      // invalid page -> 0xFFFF
     txData[2 * i]     = v & 0xFF;
     txData[2 * i + 1] = v >> 8;
   }
@@ -505,16 +506,16 @@ void onI2CReceive(int count) {
     if (cmdPending && !emergency) {
       lastErr = ERR_BUSY;
     } else {
-      if (emergency) abortReq = true;        // interrumpe lo que este en curso
+      if (emergency) abortReq = true;        // interrupts whatever is running
       rxBuf[0] = c;
       uint8_t len = 1;
       while (Wire.available() && len < sizeof(rxBuf)) rxBuf[len++] = Wire.read();
       rxLen = len;
       cmdPending = true;
-      if (state == ST_IDLE) state = ST_BUSY; // el maestro vera OCUPADO de inmediato
+      if (state == ST_IDLE) state = ST_BUSY; // the master sees BUSY right away
     }
   }
-  while (Wire.available()) Wire.read();      // descartar sobrantes
+  while (Wire.available()) Wire.read();      // discard leftovers
 }
 
 void onI2CRequest() {
@@ -539,19 +540,19 @@ void setup() {
   MCUSR = 0;
   wdt_disable();
 
-  // Salidas seguras antes que nada
+  // Safe outputs before anything else
   pinMode(PIN_UV_EN, OUTPUT);    digitalWrite(PIN_UV_EN, LOW);
-  pinMode(PIN_TLC_MODE, OUTPUT); digitalWrite(PIN_TLC_MODE, LOW);  // escala de grises
+  pinMode(PIN_TLC_MODE, OUTPUT); digitalWrite(PIN_TLC_MODE, LOW);  // grayscale mode
   for (uint8_t b = 0; b < 4; b++) { pinMode(PIN_MUX_S[b], OUTPUT); digitalWrite(PIN_MUX_S[b], LOW); }
   pinMode(PIN_INT_EXP, INPUT_PULLUP);
   setRange(false);
 
-  Tlc.init(0);                   // todos los canales en 0 (incluidos los UVC)
+  Tlc.init(0);                   // all channels at 0 (UVC included)
   tlcCommit();
 
   if (mcusr & (1 << WDRF)) setFlag(F_WDT, true);
 
-  // Direccion I2C desde los solder jumpers (cerrado = 1)
+  // I2C address from the solder jumpers (closed = 1)
   pinMode(PIN_ADDR0, INPUT_PULLUP);
   pinMode(PIN_ADDR1, INPUT_PULLUP);
   delay(2);
@@ -561,7 +562,7 @@ void setup() {
 
 #if DEBUG
   Serial.begin(115200);
-  DBG(F("WALCORG nodo v4.5 fw ")); DBG(FW_VERSION); DBG(F(" addr 0x")); Serial.println(i2cAddr, HEX);
+  DBG(F("WALCORG node v4.5 fw ")); DBG(FW_VERSION); DBG(F(" addr 0x")); Serial.println(i2cAddr, HEX);
 #endif
 
   Wire.begin(i2cAddr);
@@ -569,7 +570,7 @@ void setup() {
   Wire.onRequest(onI2CRequest);
 
 #if USE_WATCHDOG
-  wdt_enable(WDTO_2S);           // si algo se cuelga: reinicio -> UVC apagado
+  wdt_enable(WDTO_2S);           // if something hangs: reset -> UVC off
 #endif
 }
 
