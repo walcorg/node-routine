@@ -1,7 +1,7 @@
 /*
   ============================================================================
   WALCORG TERRAFORMING CORP. - Node v4.5 (data acquisition model)
-  Unified firmware for the Arduino Nano (ATmega328P)          Version 0.1
+  Unified firmware for the Arduino Nano (ATmega328P)          Version 0.2
   ============================================================================
 
   Merges the previous routines into a single sketch:
@@ -61,6 +61,11 @@
                           measures and keeps the pattern on.
                           Building block for encoding text one character at a time.
    'M', maskL, maskH      Turns on the visible LEDs given by the 12-bit mask.
+   'X', l0L, l0H, ...     Laura Encoding pattern: sets each visible LED 0..11 to its own
+        ... l11L, l11H    12-bit intensity (0-4095), waits, measures the 16 sensors and
+                          turns the LEDs off. Exactly 12 levels (25-byte frame).
+                          Each sensor averages 32 samples (~3.6 ms) to smooth the PWM.
+                          Used for optical challenges (see "Laura Encoding" below).
    'S'                    Measures the 16 sensors with the LEDs as they are.
    'O'                    Turns all visible LEDs off.
    'B', vL, vH, text...   Plays the text on LEDs 0-7, v = ms per character
@@ -85,6 +90,13 @@
   States: 0 IDLE, 1 BUSY, 2 UVC (ramping on / on / ramping off), 3 PLAYING
   Flags (bits): 0 DATA_READY  1 DARK_ALERT  2 XERR  3 UV_ACTIVE
                 4 SENSITIVE_RANGE  5 INT_EXP  6 WATCHDOG_RESET
+  Laura Encoding (Codificado de Laura):
+  The culture between the LEDs and the sensors acts as a 16x12 transfer matrix M:
+  reading = M * levels + dark + noise. 'C' measures M (pages 2..13 minus page 1)
+  and 'X' answers a challenge with an arbitrary intensity pattern. Verification
+  happens on the server, which keeps M; this firmware only performs the physics.
+  Specification: github.com/walcorg/clorela-os/blob/main/docs/laura-encoding.md
+
   Errors: 0 none, 1 unknown command, 2 invalid argument,
           3 busy (a command was already pending), 4 blocked by active UVC,
           5 aborted by 'F' or 'D'
@@ -97,7 +109,7 @@
 #include <string.h>
 
 // ----------------------------- Build options ---------------------------------
-#define FW_VERSION   0x01
+#define FW_VERSION   0x02   // 0x02: adds 'X' (Laura Encoding pattern)
 #define USE_WATCHDOG 1   // Set to 0 if the Nano has the old bootloader
                          // (with that bootloader a watchdog reset leaves it
                          //  stuck in a reset loop).
@@ -134,6 +146,10 @@ const uint16_t UV_HARD_MAX_SEC = 1800;  // 30 min, cannot be exceeded over I2C
 const uint16_t UV_BLINK_MS     = 30;
 const uint8_t  UV_BLINK_COUNT  = 10;
 const uint16_t UV_BOOST_START_MS = 10;  // MT3608 start-up before the first blink
+// 'X' uses intermediate intensities, which the TLC59401 makes with PWM at ~1.95 kHz
+// (512 us period). One analogRead takes ~112 us, so 32 samples span ~3.6 ms
+// (~7 PWM periods) and the average follows the mean light, not the PWM phase.
+const uint8_t  PATTERN_SAMPLES = 32;
 
 // ----------------------------- Codes -----------------------------------------
 enum : uint8_t { ST_IDLE = 0, ST_BUSY = 1, ST_UV = 2, ST_PLAY = 3 };
@@ -251,8 +267,7 @@ void setMux(uint8_t ch) {
 
 // Measures the 16 sensors. The first conversion of each channel is discarded
 // because the ADC sample-and-hold capacitor charges slowly from high-Z sources.
-bool readAll(uint16_t *out) {
-  uint8_t n = constrain(cfg.samples, 1, 16);
+bool readAllN(uint16_t *out, uint8_t n) {
   for (uint8_t ch = 0; ch < NUM_SENS; ch++) {
     setMux(ch);
     if (rangeSensitive) { if (!waitMs(5)) return false; }   // 100k * 10nF -> 5 tau
@@ -267,12 +282,20 @@ bool readAll(uint16_t *out) {
   return true;
 }
 
-// Measures into frame[] and sets DATA_READY.
-bool measureFrame() {
+bool readAll(uint16_t *out) {
+  return readAllN(out, constrain(cfg.samples, 1, 16));
+}
+
+// Measures into frame[] with n samples per sensor and sets DATA_READY.
+bool measureFrameN(uint8_t n) {
   setFlag(F_DATA, false);
-  if (!readAll(frame)) return false;
+  if (!readAllN(frame, n)) return false;
   setFlag(F_DATA, true);
   return true;
+}
+
+bool measureFrame() {
+  return measureFrameN(constrain(cfg.samples, 1, 16));
 }
 
 // =============================================================================
@@ -369,6 +392,31 @@ void cmdSingleLed(uint8_t n) {               // 'H'
   if (!ok) lastErr = ERR_ABORTED;
 }
 
+// Sets visible LED i to levels[i] (0..4095). UVC channels are never touched here.
+void applyLevels(const uint16_t *levels) {
+  uint16_t mask = 0;
+  for (uint8_t ch = 0; ch < NUM_VISIBLE; ch++) {
+    uint16_t v = min(levels[ch], (uint16_t)4095);
+    Tlc.set(ch, v);
+    if (v) mask |= (1u << ch);
+  }
+  visibleMask = mask;
+  tlcCommit();
+}
+
+void cmdPattern(const uint8_t *b, uint8_t n) {  // 'X'
+  if (n != 1 + 2 * NUM_VISIBLE) { lastErr = ERR_ARG; return; }
+  uint16_t levels[NUM_VISIBLE];
+  for (uint8_t i = 0; i < NUM_VISIBLE; i++) {
+    levels[i] = b[1 + 2 * i] | (b[2 + 2 * i] << 8);
+    if (levels[i] > 4095) { lastErr = ERR_ARG; return; }
+  }
+  applyLevels(levels);
+  bool ok = waitMs(cfg.ledSettleMs) && measureFrameN(PATTERN_SAMPLES);
+  applyVisible(0);
+  if (!ok) lastErr = ERR_ABORTED;
+}
+
 void cmdByte(uint8_t value) {                // 'K'
   applyVisible(value);                       // LEDs 0..7
   if (!waitMs(cfg.ledSettleMs) || !measureFrame()) lastErr = ERR_ABORTED;
@@ -427,6 +475,7 @@ void execute(const uint8_t *b, uint8_t n) {
     case 'H': if (n >= 2) cmdSingleLed(b[1]); else lastErr = ERR_ARG; break;
     case 'K': if (n >= 2) cmdByte(b[1]);      else lastErr = ERR_ARG; break;
     case 'M': if (n >= 3) applyVisible(b[1] | (b[2] << 8)); else lastErr = ERR_ARG; break;
+    case 'X': cmdPattern(b, n); break;
     case 'S': if (!measureFrame()) lastErr = ERR_ABORTED; break;
     case 'O': applyVisible(0); break;
     case 'C': cmdCalibrate(); break;

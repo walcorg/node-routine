@@ -80,6 +80,16 @@ class Node:
         self.command("O")
         return results
 
+    def measure_pattern(self, levels):
+        """Laura Encoding challenge: 12 LED intensities (0-4095) -> 16 readings."""
+        if len(levels) != 12 or any(not 0 <= v <= 4095 for v in levels):
+            raise ValueError("levels must be 12 integers in 0..4095")
+        args = []
+        for v in levels:
+            args += [v & 0xFF, v >> 8]
+        self.command("X", *args); self.wait()
+        return self.page(0)
+
     def calibrate(self):
         self.command("C"); self.wait(timeout=30)
         return {"dark": self.page(1),
